@@ -1,0 +1,14 @@
+# Environment files
+.env
+.env.local
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# NCUA reference data (large text files)
+ncua-data/

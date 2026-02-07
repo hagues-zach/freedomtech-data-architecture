@@ -1,56 +1,46 @@
--- Bronze layer: two tables for clean separation of concerns
+-- Bronze layer: one table per NCUA text file, raw data preserved as JSONB.
 --
--- bronze_call_reports: Raw NCUA account codes (~780 numeric values per CU per quarter)
--- bronze_cu_profiles:  Raw FOICU institutional profile data (~24 fields per CU per quarter)
---
--- One row per credit union per quarter in each table (~4,900 rows/quarter each).
+-- 18 tables total (1 FOICU + 17 FS220 variants).
+-- Each row stores a single credit union's data for one quarter,
+-- with the full row from the source file as an untouched JSONB blob.
 
--- Financial data (account codes from FS220 files)
-CREATE TABLE bronze_call_reports (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  charter_number INT NOT NULL,
-  year INT NOT NULL,
-  quarter INT NOT NULL,
-  period TEXT NOT NULL,
-  filing_date DATE NOT NULL,
-  raw_data JSONB NOT NULL,
-  source_url TEXT,
-  imported_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(charter_number, year, quarter)
-);
+DO $$
+DECLARE
+  tables TEXT[] := ARRAY[
+    'bronze_foicu',
+    'bronze_fs220', 'bronze_fs220a', 'bronze_fs220b', 'bronze_fs220c',
+    'bronze_fs220d', 'bronze_fs220g', 'bronze_fs220h', 'bronze_fs220i',
+    'bronze_fs220j', 'bronze_fs220k', 'bronze_fs220l', 'bronze_fs220m',
+    'bronze_fs220n', 'bronze_fs220p', 'bronze_fs220q', 'bronze_fs220r',
+    'bronze_fs220s'
+  ];
+  t TEXT;
+BEGIN
+  FOREACH t IN ARRAY tables LOOP
+    EXECUTE format('
+      CREATE TABLE IF NOT EXISTS %I (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        cu_number TEXT NOT NULL,
+        cycle_date TEXT,
+        year INT NOT NULL,
+        quarter INT NOT NULL,
+        period TEXT NOT NULL,
+        raw_data JSONB NOT NULL,
+        source_url TEXT,
+        imported_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(cu_number, year, quarter)
+      )', t);
 
-CREATE INDEX idx_bronze_reports_charter ON bronze_call_reports(charter_number);
-CREATE INDEX idx_bronze_reports_period ON bronze_call_reports(year, quarter);
-CREATE INDEX idx_bronze_reports_filing_date ON bronze_call_reports(filing_date);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%s_cu ON %I(cu_number)', t, t);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS idx_%s_period ON %I(year, quarter)', t, t);
 
-ALTER TABLE bronze_call_reports ENABLE ROW LEVEL SECURITY;
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
 
-CREATE POLICY "Bronze call reports readable by authenticated users"
-  ON bronze_call_reports FOR SELECT
-  TO authenticated
-  USING (true);
-
--- Institutional profile data (from FOICU.txt)
-CREATE TABLE bronze_cu_profiles (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  charter_number INT NOT NULL,
-  year INT NOT NULL,
-  quarter INT NOT NULL,
-  period TEXT NOT NULL,
-  filing_date DATE NOT NULL,
-  raw_data JSONB NOT NULL,
-  source_url TEXT,
-  imported_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(charter_number, year, quarter)
-);
-
-CREATE INDEX idx_bronze_profiles_charter ON bronze_cu_profiles(charter_number);
-CREATE INDEX idx_bronze_profiles_period ON bronze_cu_profiles(year, quarter);
-CREATE INDEX idx_bronze_profiles_filing_date ON bronze_cu_profiles(filing_date);
-
-ALTER TABLE bronze_cu_profiles ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Bronze CU profiles readable by authenticated users"
-  ON bronze_cu_profiles FOR SELECT
-  TO authenticated
-  USING (true);
+    EXECUTE format('
+      CREATE POLICY IF NOT EXISTS "% readable by authenticated users"
+        ON %I FOR SELECT
+        TO authenticated
+        USING (true)
+    ', initcap(replace(t, '_', ' ')), t);
+  END LOOP;
+END $$;
